@@ -1,7 +1,7 @@
 import rq from 'request-promise-native';
 import readline from 'readline';
 import fs from 'fs';
-
+import { Observable, Observer } from "rxjs";
 
 require('babel-polyfill');
 
@@ -13,10 +13,6 @@ const inFile = process.argv[3] || './inFile.csv';
 const outFile = process.argv[4] || './outFile.csv';
 
 const separator = ';';
-
-const lineReader = readline.createInterface({
-    input: fs.createReadStream(inFile)
-});
 
 const lineWriter = fs.createWriteStream(outFile);
 
@@ -35,25 +31,54 @@ async function geocodeAddress(address) {
     }
 }
 
-async function geocode() {
-    const regex = /\(.*\)/g; //
-    lineReader.on('line', async(line) => {
-        let agent = line.split(separator);
-        let address = agent[5] + ' ' + agent[6] + ', ' + agent[7];
-        address = address.replace(regex, ''); // Remove () place specification from address
-        let id = agent[18];
-        try {
-            let location = await geocodeAddress(address);
-            lineWriter.write([id, location.lng, location.lat].join(separator) + '\n');
-        } catch (err) {
-            console.error(`Error obtaining location for ${id}. Address - ${address}`);
-            console.error(err);
-        }
-    });
+function readFile(file) {
+    return Observable.create((observer) => {
+        const lineReader = readline.createInterface({
+            input: fs.createReadStream(file)
+        });
+        lineReader.on('line', line => {
+            observer.next(line)
+        }).on('close', () => {
+            observer.complete();
+        }).on('error', err => {
+            observer.error(err);
+        })
+
+    })
+}
+
+async function processLine(line) {
+    const regex = /\(.*\)/g;
+    let agent = line.split(separator);
+    let address = agent[5] + ' ' + agent[6] + ', ' + agent[7];
+    address = address.replace(regex, ''); // Remove () place specification from address
+    let id = agent[18];
+    try {
+        let location = await geocodeAddress(address);
+        console.log(`OK - obtained data for ${address}`);
+        lineWriter.write([id, location.lng, location.lat].join(separator) + '\n');
+    } catch (err) {
+        console.error(`ERROR - obtaining location for ${id}. Address - ${address}`);
+        console.error(err);
+    }
+}
+
+async function geocode(cb) {
+    return new Promise((resolve, reject) => {
+        readFile(inFile).flatMap(line => processLine(line)).subscribe({
+            complete: () => {
+                cb();
+                resolve();
+            },
+            error: err => {
+                reject(err);
+            }
+        });
+    })
 }
 async function main() {
     console.log(`Geocoding data from ${inFile}`);
-    await geocode();
+    await geocode(() => console.log(`Geocoding done and saved in file ${outFile}`));
 }
 
-main(lineReader, lineWriter);
+main();
