@@ -14,16 +14,28 @@ const outFile = process.argv[4] || './outFile.csv';
 
 const separator = ';';
 
-const lineWriter = fs.createWriteStream(outFile);
+function delayedCall(fn, par, delay) {
+    return new Promise((resolve) => {
+        setTimeout(() => resolve(fn(par)), delay);
+    });
+}
 
 async function geocodeAddress(address) {
     const url = geocodeUrl + encodeURIComponent(address) + '&key=' + apiKey;
     try {
-        let res = await rq.get({ url: url });
+        let res = await rq.get({url: url});
         let data = JSON.parse(res);
         if (data.status === 'OK') {
             return data.results[0].geometry.location;
         } else {
+            if(data.status === 'OVER_QUERY_LIMIT') {
+                let delay = Math.floor((Math.random() * 1000) + 1);
+                let res = await delayedCall(rq.get, {url: url}, delay);
+                data = JSON.parse(res);
+                if (data.status === 'OK') {
+                    return data.results[0].geometry.location;
+                }
+            }
             return Promise.reject(new Error(data.status));
         }
     } catch (err) {
@@ -47,7 +59,7 @@ function readFile(file) {
     })
 }
 
-async function processLine(line) {
+async function processLine(line, lineWriter) {
     const regex = /\(.*\)/g;
     let agent = line.split(separator);
     let address = agent[5] + ' ' + agent[6] + ', ' + agent[7];
@@ -64,9 +76,11 @@ async function processLine(line) {
 }
 
 async function geocode(cb) {
+    const lineWriter = fs.createWriteStream(outFile);
     return new Promise((resolve, reject) => {
-        readFile(inFile).flatMap(line => processLine(line)).subscribe({
+        readFile(inFile).flatMap(line => processLine(line, lineWriter)).subscribe({
             complete: () => {
+                lineWriter.close();
                 cb();
                 resolve();
             },
